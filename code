@@ -1,0 +1,293 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+# =====================================================
+# SIGNAL GENERATION
+# =====================================================
+
+def generate_signal(fs, duration, amplitude, frequency):
+    t = np.arange(0, duration, 1 / fs)
+    x = amplitude * np.sin(2 * np.pi * frequency * t)
+    return t, x
+
+
+# =====================================================
+# FIRST-ORDER DPCM
+# =====================================================
+
+def dpcm(x, bits=4):
+
+    levels = 2 ** bits
+    error_min = -2
+    error_max = 2
+
+    step = (error_max - error_min) / (levels - 1)
+
+    prediction = np.zeros(len(x))
+    error = np.zeros(len(x))
+    quantized_error = np.zeros(len(x))
+    reconstruction = np.zeros(len(x))
+
+    for n in range(len(x)):
+
+        # 1. Prediction
+        if n == 0:
+            prediction[n] = 0
+        else:
+            prediction[n] = reconstruction[n - 1]
+
+        # 2. Prediction error
+        error[n] = x[n] - prediction[n]
+
+        # 3. Quantization
+        quantized_error[n] = (
+            step * np.round(error[n] / step)
+        )
+
+        quantized_error[n] = np.clip(
+            quantized_error[n],
+            error_min,
+            error_max
+        )
+
+        # 4. Reconstruction
+        reconstruction[n] = (
+            prediction[n] + quantized_error[n]
+        )
+
+        reconstruction[n] = np.clip(
+            reconstruction[n],
+            -1,
+            1
+        )
+
+    return (
+        prediction,
+        error,
+        quantized_error,
+        reconstruction,
+        step
+    )
+
+
+# =====================================================
+# DELTA MODULATION
+# =====================================================
+
+def delta_modulation(x, delta):
+
+    staircase = np.zeros(len(x))
+    previous = 0
+
+    for n in range(len(x)):
+
+        if x[n] >= previous:
+            staircase[n] = previous + delta
+        else:
+            staircase[n] = previous - delta
+
+        previous = staircase[n]
+
+    return staircase
+
+
+# =====================================================
+# MANDATORY VALIDATION
+# =====================================================
+
+def validate_delta_steps(staircase, delta):
+
+    previous = np.concatenate(([0], staircase[:-1]))
+
+    changes = staircase - previous
+
+    valid_steps = np.isclose(
+        np.abs(changes),
+        delta,
+        atol=1e-10
+    )
+
+    invalid_indices = np.where(~valid_steps)[0]
+
+    print("\nMANDATORY VALIDATION")
+    print("--------------------")
+
+    if len(invalid_indices) == 0:
+        print("PASSED: Every step is exactly +Delta or -Delta")
+    else:
+        print("FAILED: Invalid steps found")
+        print("Invalid indices:", invalid_indices)
+
+    return changes
+
+
+# =====================================================
+# DELTA MODULATION ANALYSIS
+# =====================================================
+
+def analyze_signal(x, staircase, fs, frequency, delta):
+
+    amplitude = np.max(np.abs(x))
+
+    input_slope = 2 * np.pi * frequency * amplitude
+    staircase_slope = delta * fs
+
+    mse = np.mean((x - staircase) ** 2)
+
+    print("\nANALYSIS")
+    print("--------")
+    print("Frequency:", frequency, "Hz")
+    print("Delta:", delta)
+    print("Maximum input slope:", input_slope)
+    print("Maximum staircase slope:", staircase_slope)
+    print("MSE:", mse)
+
+    if input_slope > staircase_slope:
+        print("Condition: SLOPE OVERLOAD EXPECTED")
+    else:
+        print("Condition: GRANULAR NOISE EXPECTED")
+
+
+# =====================================================
+# MAIN PROGRAM
+# =====================================================
+
+fs = 5000
+duration = 0.20
+amplitude = 1
+
+# =====================================================
+# DPCM SIMULATION
+# =====================================================
+
+t, x = generate_signal(
+    fs,
+    duration,
+    amplitude,
+    frequency=5
+)
+
+prediction, error, quantized_error, reconstruction, step = dpcm(
+    x,
+    bits=4
+)
+
+print("=" * 50)
+print("FIRST-ORDER DPCM")
+print("=" * 50)
+
+print("Quantization step:", step)
+
+dpcm_mse = np.mean((x - reconstruction) ** 2)
+print("DPCM MSE:", dpcm_mse)
+
+plt.figure(figsize=(10, 5))
+plt.plot(t, x, label="Original Signal")
+plt.plot(t, reconstruction, "--", label="Reconstructed Signal")
+plt.title("First-Order DPCM")
+plt.xlabel("Time (s)")
+plt.ylabel("Amplitude")
+plt.grid()
+plt.legend()
+plt.show()
+
+plt.figure(figsize=(10, 5))
+plt.plot(t, error, label="Prediction Error")
+plt.plot(t, quantized_error, "--", label="Quantized Error")
+plt.title("DPCM Prediction and Quantization")
+plt.xlabel("Time (s)")
+plt.ylabel("Amplitude")
+plt.grid()
+plt.legend()
+plt.show()
+
+
+# =====================================================
+# DELTA MODULATION TEST CASES
+# =====================================================
+
+test_cases = [
+    (1, 0.02),    # Granular noise condition
+    (1, 0.08),    # Larger step size
+    (40, 0.02),   # Slope overload condition
+    (40, 0.20)    # Reduced slope overload
+]
+
+for frequency, delta in test_cases:
+
+    t, x = generate_signal(
+        fs,
+        duration,
+        amplitude,
+        frequency
+    )
+
+    staircase = delta_modulation(x, delta)
+
+    # Mandatory validation
+    changes = validate_delta_steps(
+        staircase,
+        delta
+    )
+
+    # Analyze conditions
+    analyze_signal(
+        x,
+        staircase,
+        fs,
+        frequency,
+        delta
+    )
+
+    # Plot
+    plt.figure(figsize=(10, 5))
+
+    plt.plot(
+        t,
+        x,
+        label="Original Signal"
+    )
+
+    plt.step(
+        t,
+        staircase,
+        where="post",
+        label="Delta Modulated Signal"
+    )
+
+    plt.title(
+        f"Delta Modulation: f = {frequency} Hz, "
+        f"Delta = {delta}"
+    )
+
+    plt.xlabel("Time (s)")
+    plt.ylabel("Amplitude")
+    plt.grid()
+    plt.legend()
+    plt.show()
+
+    # Zoomed plot
+    samples = min(500, len(t))
+
+    plt.figure(figsize=(10, 5))
+
+    plt.plot(
+        t[:samples],
+        x[:samples],
+        label="Original Signal"
+    )
+
+    plt.step(
+        t[:samples],
+        staircase[:samples],
+        where="post",
+        label="Staircase Signal"
+    )
+
+    plt.title("Zoomed Delta Modulation Output")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Amplitude")
+    plt.grid()
+    plt.legend()
+    plt.show()
